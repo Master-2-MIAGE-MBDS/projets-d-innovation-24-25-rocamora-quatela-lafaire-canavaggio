@@ -17,6 +17,12 @@ namespace DeepBridgeWindowsApp.CUDA
         // L'accélérateur est maintenant public pour permettre l'accès depuis DicomImageProcessor
         public Accelerator Accelerator { get; private set; }
 
+        // Dictionnaire pour stocker les tampons d'entrée DICOM persistants en VRAM
+        private readonly Dictionary<string, MemoryBuffer1D<byte, Stride1D.Dense>> persistentInputBuffers = new Dictionary<string, MemoryBuffer1D<byte, Stride1D.Dense>>();
+        
+        // Buffer de sortie réutilisable
+        private MemoryBuffer1D<byte, Stride1D.Dense> sharedOutputBuffer;
+
         private readonly Action<Index1D, ArrayView<byte>, ArrayView<byte>, int, int, int, int, int, double, double> pixelKernel;
 
         public CudaBatchProcessor()
@@ -37,11 +43,45 @@ namespace DeepBridgeWindowsApp.CUDA
         }
 
         /// <summary>
-        /// Traite une seule tranche DICOM en utilisant CUDA.
+        /// Alloue un tampon d'entrée persistant en VRAM pour une tranche DICOM spécifique
         /// </summary>
-        public void ProcessSlice(
-            MemoryBuffer1D<byte, Stride1D.Dense> deviceInput,
-            MemoryBuffer1D<byte, Stride1D.Dense> deviceOutput,
+        public void LoadDicomSliceToGPU(string sliceId, byte[] inputData)
+        {
+            if (persistentInputBuffers.ContainsKey(sliceId))
+            {
+                // Déjà chargé, on ne fait rien
+                return;
+            }
+
+            // Allouer et copier les données d'entrée vers la VRAM
+            var deviceBuffer = Accelerator.Allocate1D<byte>(inputData);
+            deviceBuffer.CopyFromCPU(inputData);
+            
+            // Stocker le tampon dans notre dictionnaire
+            persistentInputBuffers[sliceId] = deviceBuffer;
+            
+            Console.WriteLine($"Loaded slice {sliceId} to GPU memory");
+        }
+        
+        /// <summary>
+        /// Libère un tampon d'entrée persistant de la VRAM
+        /// </summary>
+        public void UnloadDicomSliceFromGPU(string sliceId)
+        {
+            if (persistentInputBuffers.TryGetValue(sliceId, out var buffer))
+            {
+                buffer.Dispose();
+                persistentInputBuffers.Remove(sliceId);
+                Console.WriteLine($"Unloaded slice {sliceId} from GPU memory");
+            }
+        }
+
+        /// <summary>
+        /// Traite une seule tranche DICOM en utilisant CUDA, avec préférence pour les tampons persistants
+        /// </summary>
+        public byte[] ProcessSlice(
+            string sliceId,
+            byte[] inputData,
             int windowCenter,
             int windowWidth,
             int bitsStored,
@@ -50,17 +90,88 @@ namespace DeepBridgeWindowsApp.CUDA
             double rescaleSlope,
             double rescaleIntercept)
         {
-            // Calculer le nombre d'éléments à traiter (chaque pixel est sur 2 bytes)
-            var numElements = deviceInput.Length / 2;
+            // Calculer la taille de sortie (RGBA = 4 bytes par pixel)
+            var outputLength = (inputData.Length / 2) * 4;
+            var output = new byte[outputLength];
+            
+            // Utiliser le tampon d'entrée persistant s'il existe, sinon en créer un temporaire
+            MemoryBuffer1D<byte, Stride1D.Dense> deviceInput;
+            bool usingPersistentBuffer = persistentInputBuffers.TryGetValue(sliceId, out deviceInput);
+            
+            try
+            {
+                if (!usingPersistentBuffer)
+                {
+                    // Créer un tampon temporaire
+                    deviceInput = Accelerator.Allocate1D(inputData);
+                    deviceInput.CopyFromCPU(inputData);
+                }
+                
+                // Créer ou réutiliser le tampon de sortie
+                if (sharedOutputBuffer == null || sharedOutputBuffer.Length < outputLength)
+                {
+                    sharedOutputBuffer?.Dispose();
+                    sharedOutputBuffer = Accelerator.Allocate1D<byte>(outputLength);
+                }
 
-            // Exécuter le kernel CUDA
-            pixelKernel(new Index1D((int)numElements), deviceInput.View, deviceOutput.View,
-                windowCenter, windowWidth, bitsStored,
-                pixelRepresentation, bitsAllocated,
-                rescaleSlope, rescaleIntercept);
+                // Calculer le nombre d'éléments à traiter (chaque pixel est sur 2 bytes)
+                var numElements = inputData.Length / 2;
 
-            // Synchroniser pour s'assurer que le traitement est terminé
-            Accelerator.Synchronize();
+                // Exécuter le kernel CUDA
+                pixelKernel(new Index1D((int)numElements), deviceInput.View, sharedOutputBuffer.View,
+                    windowCenter, windowWidth, bitsStored,
+                    pixelRepresentation, bitsAllocated,
+                    rescaleSlope, rescaleIntercept);
+
+                // Synchroniser pour s'assurer que le traitement est terminé
+                Accelerator.Synchronize();
+                
+                // Copier le résultat vers le CPU
+                sharedOutputBuffer.CopyToCPU(output);
+            }
+            finally
+            {
+                // Libérer le tampon temporaire si utilisé
+                if (!usingPersistentBuffer)
+                {
+                    deviceInput?.Dispose();
+                }
+            }
+            
+            return output;
+        }
+        
+        /// <summary>
+        /// Précharge un ensemble de tranches DICOM en VRAM pour un accès plus rapide
+        /// </summary>
+        public void PreloadBatch(Dictionary<string, byte[]> slices)
+        {
+            // Libérer toute mémoire GPU inutilisée
+            CleanupUnusedBuffers();
+            
+            foreach (var slice in slices)
+            {
+                LoadDicomSliceToGPU(slice.Key, slice.Value);
+            }
+        }
+        
+        /// <summary>
+        /// Libère les tampons GPU qui ne sont plus nécessaires pour économiser de la mémoire
+        /// </summary>
+        public void CleanupUnusedBuffers(IEnumerable<string> activeSliceIds = null)
+        {
+            if (activeSliceIds == null)
+            {
+                return;
+            }
+            
+            var activeSet = new HashSet<string>(activeSliceIds);
+            var keysToRemove = persistentInputBuffers.Keys.Where(k => !activeSet.Contains(k)).ToList();
+            
+            foreach (var key in keysToRemove)
+            {
+                UnloadDicomSliceFromGPU(key);
+            }
         }
 
         private static void ProcessPixelKernel(
@@ -128,6 +239,16 @@ namespace DeepBridgeWindowsApp.CUDA
 
         public void Dispose()
         {
+            // Nettoyer tous les tampons persistants
+            foreach (var buffer in persistentInputBuffers.Values)
+            {
+                buffer.Dispose();
+            }
+            persistentInputBuffers.Clear();
+            
+            // Nettoyer le tampon de sortie partagé
+            sharedOutputBuffer?.Dispose();
+            
             Accelerator?.Dispose();
             context?.Dispose();
         }

@@ -229,11 +229,47 @@ namespace DeepBridgeWindowsApp
 
         private void UpdateDisplay()
         {
-            mainPictureBox.Image?.Dispose();
+            // Dispose of the old image before assigning a new one
+            var oldImage = mainPictureBox.Image;
             mainPictureBox.Image = displayManager.GetCurrentSliceImage(windowWidthTrackBar.Value, windowCenterTrackBar.Value);
+            oldImage?.Dispose();
+            
+            // Update labels
             sliceLabel.Text = $"Slice {displayManager.GetCurrentSliceIndex() + 1} of {displayManager.GetTotalSlices()}";
             windowCenterLabel.Text = "Window Center: " + windowCenterTrackBar.Value;
             windowWidthLabel.Text = "Window Width: " + windowWidthTrackBar.Value;
+            
+            // Report memory usage periodically
+            if (displayManager.GetCurrentSliceIndex() % 10 == 0)
+            {
+                Console.WriteLine($"Mémoire RAM utilisée: {GC.GetTotalMemory(false) / (1024 * 1024)} MB");
+            }
+        }
+        
+        /// <summary>
+        /// Clean up any resources being used.
+        /// </summary>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Console.WriteLine("Nettoyage des ressources de la visionneuse DICOM...");
+                
+                // Dispose of images
+                mainPictureBox.Image?.Dispose();
+                
+                // Dispose of display manager
+                displayManager?.Dispose();
+                
+                // Force garbage collection
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                
+                Console.WriteLine($"Mémoire après nettoyage: {GC.GetTotalMemory(true) / (1024 * 1024)} MB");
+            }
+            
+            base.Dispose(disposing);
         }
     }
 }

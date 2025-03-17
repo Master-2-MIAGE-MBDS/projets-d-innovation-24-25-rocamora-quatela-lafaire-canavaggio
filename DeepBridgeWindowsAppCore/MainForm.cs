@@ -224,25 +224,34 @@ namespace DeepBridgeWindowsApp
             ShowDicomInfo(selectedPath);
         }
 
+        private DicomDisplayManager currentDisplayManager;
+        
         private void ShowDicomInfo(string path)
         {
             var dicomFiles = Directory.GetFiles(path, "*.dcm", SearchOption.TopDirectoryOnly);
             if (dicomFiles.Length == 0)
                 return;
 
+            // Clean up any previous resources
+            CleanupCurrentResources();
+            
+            // Report current memory usage
+            Console.WriteLine($"Mémoire avant chargement: {GC.GetTotalMemory(true) / (1024 * 1024)} MB");
+            
+            // Create new reader and display manager
             var reader = new DicomReader(path);
             reader.LoadGlobalView();
-            var displayManager = new DicomDisplayManager(reader);
+            currentDisplayManager = new DicomDisplayManager(reader);
 
             // Basic info display - you can expand this to show more DICOM metadata
             infoLabel.Text = $"{Path.GetFileName(path)}\n" +
                             $"Number of DICOM files: {dicomFiles.Length}\n" +
                             $"Total size: {GetDirectorySize(path) / 1024.0 / 1024.0:F2} MB\n\n" +
-                            $"Patient ID: {displayManager.globalView.PatientID}\n" +
-                            $"Patient Name: {displayManager.globalView.PatientName}\n" +
-                            $"Patient Sex: {displayManager.globalView.PatientSex}\n" +
-                            $"Modality: {displayManager.globalView.Modality}\n" +
-                            $"Resolution: {displayManager.globalView.Rows} x {displayManager.globalView.Columns}";
+                            $"Patient ID: {currentDisplayManager.globalView.PatientID}\n" +
+                            $"Patient Name: {currentDisplayManager.globalView.PatientName}\n" +
+                            $"Patient Sex: {currentDisplayManager.globalView.PatientSex}\n" +
+                            $"Modality: {currentDisplayManager.globalView.Modality}\n" +
+                            $"Resolution: {currentDisplayManager.globalView.Rows} x {currentDisplayManager.globalView.Columns}";
 
             globalViewPictureBox?.Dispose();
             globalViewPictureBox = new PictureBox
@@ -250,11 +259,28 @@ namespace DeepBridgeWindowsApp
                 Dock = DockStyle.Fill,
                 SizeMode = PictureBoxSizeMode.Zoom
             };
-            globalViewPictureBox.Image = displayManager.GetGlobalViewImage();
+            globalViewPictureBox.Image = currentDisplayManager.GetGlobalViewImage();
             rightPanel.Controls.Add(globalViewPictureBox);
 
             viewDicomButton.Enabled = true;
             viewDicomButton.Tag = path;
+            
+            // Report memory usage after loading
+            Console.WriteLine($"Mémoire après chargement: {GC.GetTotalMemory(false) / (1024 * 1024)} MB");
+        }
+        
+        private void CleanupCurrentResources()
+        {
+            // Dispose of the current display manager
+            if (currentDisplayManager != null)
+            {
+                currentDisplayManager.Dispose();
+                currentDisplayManager = null;
+            }
+            
+            // Force garbage collection
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
         }
 
         private long GetDirectorySize(string path)
@@ -266,10 +292,43 @@ namespace DeepBridgeWindowsApp
         private void ViewDicomButton_Click(object sender, EventArgs e)
         {
             var path = viewDicomButton.Tag.ToString();
+            
+            // Clean up current resources before loading a large dataset
+            CleanupCurrentResources();
+            
+            // Force a full garbage collection before loading new files
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            
+            Console.WriteLine($"Mémoire avant chargement complet: {GC.GetTotalMemory(true) / (1024 * 1024)} MB");
+            
+            // Create a new reader and load all files
             var reader = new DicomReader(path);
             reader.LoadAllFiles();  // Now loads all files when viewing
-            var viewerForm = new DicomViewerForm(reader);
-            viewerForm.ShowDialog();
+            
+            // Open viewer form
+            using (var viewerForm = new DicomViewerForm(reader))
+            {
+                viewerForm.ShowDialog();
+            }
+            
+            // Clean up and collect garbage after closing viewer
+            reader.Dispose();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            
+            Console.WriteLine($"Mémoire après fermeture de la visionneuse: {GC.GetTotalMemory(true) / (1024 * 1024)} MB");
+        }
+        
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Clean up resources
+                CleanupCurrentResources();
+                globalViewPictureBox?.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 }
