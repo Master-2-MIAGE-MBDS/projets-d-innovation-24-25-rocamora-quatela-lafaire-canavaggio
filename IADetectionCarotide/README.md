@@ -8,6 +8,8 @@ Notre solution répond à un besoin clinique crucial : l'analyse manuelle des ca
 
 Le pipeline complet comprend le prétraitement avancé des images DICOM, un système d'annotation assistée, l'entraînement optimisé d'un modèle de détection et un module d'inférence adaptable pour l'analyse de nouvelles images. Cette solution s'intègre parfaitement aux workflows cliniques existants et peut servir d'assistant au diagnostic pour les radiologues et neurologues.
 
+![alt text](image.png)
+
 ## Table des matières
 - [Fondements techniques](#fondements-techniques)
 - [Prérequis](#prérequis)
