@@ -1,0 +1,21 @@
+# Base packages
+numpy>=1.19.0
+pandas>=1.1.0
+
+# Computer Vision and Image Processing
+opencv-python>=4.5.0
+Pillow>=8.0.0
+
+# DICOM Processing
+pydicom>=2.2.0
+
+# Object Detection
+ultralytics>=8.0.0  # For YOLOv8
+
+# Data Manipulation
+pyyaml>=5.4.0
+pathlib>=1.0.1
+
+# Optional - for GPU support
+# torch>=1.9.0
+# torchvision>=0.10.0
