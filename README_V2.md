@@ -20,8 +20,6 @@
 6. [Implémentation technique](#implémentation-technique)
    - [Optimisation GPU via CUDA](#optimisation-gpu-via-cuda)
    - [Détection et analyse des carotides](#détection-et-analyse-des-carotides)
-   - [Système de classification des sténoses](#système-de-classification-des-sténoses)
-   - [Interface utilisateur et visualisation](#interface-utilisateur-et-visualisation)
 7. [Résultats et performances](#résultats-et-performances)
 8. [Répartition des tâches](#répartition-des-tâches)
 9. [Recommandations et perspectives](#recommandations-et-perspectives)
@@ -145,67 +143,23 @@ L'architecture mise en place repose sur un modèle multi-couches :
 
 ## Détection et analyse des carotides
 
-### Architecture globale du système de détection
+### Pipeline de détection automatique
+Nous avons développé un pipeline complet pour l'analyse des carotides :
+1. **Segmentation automatique** : localisation et isolation des carotides dans les volumes 3D
+2. **Extraction de caractéristiques** : mesure du diamètre luminal, analyse de la paroi vasculaire, caractérisation des plaques
+3. **Classification des anomalies** : détection et catégorisation des sténoses et autres pathologies carotidiennes
 
-La détection et l'analyse des carotides constituent le cœur de l'assistant de diagnostic DeepBridge. Cette fonctionnalité est articulée autour de quatre modules complémentaires formant une pipeline complète :
+### Modèle prédictif pour les complications
+Notre système d'IA analyse les corrélations entre les caractéristiques morphologiques et les complications cliniques pour générer une évaluation personnalisée des risques :
+- Prédiction du risque de sténose carotidienne basée sur les paramètres anatomiques
+- Estimation de la probabilité de complications post-opératoires
+- Analyse comparative avec des cas similaires issus de la base de données
 
-![alt text](pipeline.png)
-
-### Module 1 : Prétraitement des images DICOM
-
-Le prétraitement transforme les images DICOM brutes en entrées optimisées pour la détection des carotides. Le script `process_dicom.py` réalise plusieurs opérations cruciales pour améliorer la visibilité des structures vasculaires :
-
-1. **Double application de CLAHE** (Contrast Limited Adaptive Histogram Equalization) avec des paramètres optimisés pour les structures vasculaires
-2. **Correction gamma adaptative** pour accentuer les zones d'intérêt tout en préservant les détails subtils
-3. **Filtrage bilatéral** qui préserve les bords tout en réduisant significativement le bruit d'acquisition
-4. **Normalisation perceptuelle** basée sur les percentiles pour optimiser la plage dynamique
-
-Ces opérations permettent de révéler des structures carotidiennes parfois difficilement visibles sur les images originales, facilitant considérablement le travail de détection automatique.
-
-#### Innovation : Système de grille d'annotation
-
-Pour faciliter l'acquisition de données d'entraînement précises, nous avons développé un système de grille d'annotation ajustable qui guide les radiologues dans le processus de marquage des carotides. Ce système superpose une grille paramétrable sur les images prétraitées, permettant un positionnement précis et cohérent des annotations, essentiel pour l'entraînement d'un modèle robuste.
-
-### Module 2 : Annotation et conversion des données
-
-L'annotation des images suit un workflow optimisé permettant une construction efficace du jeu de données d'entraînement :
-
-1. Les images prétraitées sont annotées par des radiologues utilisant VGG Image Annotator (VIA)
-2. Le script `convert_annotations.py` transforme automatiquement ces annotations au format YOLO
-3. Les données sont divisées de manière stratifiée (70% entraînement, 15% validation, 15% test)
-
-Cette méthodologie garantit la qualité et la cohérence du jeu de données d'entraînement, facteur déterminant pour les performances du modèle.
-
-### Module 3 : Architecture du réseau de neurones et entraînement
-
-Pour la détection des carotides, nous avons implémenté et optimisé l'architecture YOLOv8, composée de trois éléments principaux :
-
-```
-─── Backbone: CSPDarknet 
-   └── Neck: PANet
-      └── Head: Decoupled detection heads
-          ├── Classification branch
-          └── Bounding box regression branch
-```
-
-Le script `train_yolo.py` configure et lance l'entraînement du modèle avec des hyperparamètres soigneusement optimisés pour la détection des carotides. L'analyse des courbes d'apprentissage montre une progression remarquable des performances, avec une évolution du mAP50 de 0.00333 à 0.995 sur la période d'entraînement complète.
-
-### Module 4 : Système d'inférence et analyse des résultats
-
-L'inférence est gérée par un algorithme adaptatif implémenté dans `detect_carotide.py`. Cette approche innovante utilise plusieurs passes de détection avec des seuils de confiance décroissants (0.25, 0.15, 0.1) pour maximiser la détection des carotides dans des images parfois complexes. Le système s'arrête dès qu'il détecte les deux carotides, optimisant ainsi le temps de traitement.
-
-Chaque image est ensuite analysée, avec génération d'un rapport détaillé incluant :
-- La localisation précise des carotides
-- Le niveau de confiance de la détection
-- Des mesures morphologiques essentielles au diagnostic
-
-## Système de classification des sténoses
-
-[Section sur le système de classification développé par Nicolas QUATELA]
-
-## Interface utilisateur et visualisation
-
-[Section sur l'interface utilisateur développée par Enzo ROCAMORA]
+### Intégration avec l'interface utilisateur
+Les résultats de l'analyse par IA sont présentés de manière intuitive dans l'interface :
+- Visualisation des zones d'intérêt avec surlignage coloré des anomalies détectées
+- Affichage des mesures quantitatives et des indices de risque
+- Recommandations automatiques pour les analyses complémentaires
 
 # Résultats et performances
 
@@ -236,7 +190,6 @@ La fluidité du rendu 3D est passée de 8-12 FPS à 45-60 FPS, tandis que le nom
 - Précision de détection : 97.3%
 - Sensibilité : 96.8%
 - Spécificité : 98.1%
-- Temps moyen de détection par image : 120ms
 
 ### Classification des sténoses
 - Précision globale : 92.5%
@@ -247,9 +200,6 @@ La fluidité du rendu 3D est passée de 8-12 FPS à 45-60 FPS, tandis que le nom
 - Aire sous la courbe ROC (AUC) : 0.88
 - Valeur prédictive positive : 83.2%
 - Valeur prédictive négative : 90.5%
-
-### Performances du pipeline complet
-Le système complet, de la lecture DICOM à la production d'un rapport d'analyse, traite un examen patient en moins d'une minute, représentant une amélioration de plus de 95% par rapport à l'analyse manuelle traditionnelle.
 
 # Répartition des tâches
 
@@ -262,11 +212,8 @@ Notre équipe a collaboré de manière synergique en répartissant les responsab
 
 **LAFAIRE Dylan** :
 - Conception et implémentation des algorithmes de détection des carotides
-- Développement du système complet de prétraitement d'images DICOM
-- Implémentation d'un réseau de neurones YOLOv8 optimisé pour la détection vasculaire
-- Création d'un système innovant de grille d'annotation pour faciliter le marquage des structures
-- Développement d'un algorithme d'inférence adaptatif multi-seuils
-- Intégration avec les autres composants du système DeepBridge
+- Développement du modèle de segmentation automatique
+- Intégration des algorithmes d'IA dans l'application
 
 **QUATELA Nicolas** :
 - Création du modèle de classification des sténoses carotidiennes
@@ -293,8 +240,6 @@ Cette organisation a permis une progression efficace du projet tout en assurant 
 - Augmentation du jeu de données d'entraînement pour améliorer la robustesse
 - Intégration de techniques d'apprentissage continu pour l'adaptation aux nouvelles données
 - Développement de modèles spécifiques pour différentes modalités d'imagerie
-- Extension du système de détection à d'autres structures vasculaires (artères vertébrales, tronc artériel)
-- Implémentation d'une fonctionnalité de suivi longitudinal des changements carotidiens
 
 ## Perspectives à moyen terme
 
