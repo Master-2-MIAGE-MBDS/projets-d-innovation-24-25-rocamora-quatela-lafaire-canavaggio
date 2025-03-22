@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Drawing.Printing;
 using System.Linq;
 using System.Threading.Tasks;
@@ -56,11 +57,11 @@ namespace DeepBridgeWindowsApp
         // Slice indicator
         private int[] sliceIndicatorVBO;
         private readonly float[] sliceIndicatorVertices = {
-            // Front face vertices
-            0f, 0.5f, 0.5f,
-            0f, -0.5f, 0.5f,
-            0f, -0.5f, -0.5f,
-            0f, 0.5f, -0.5f,
+            // Front face vertices - making it slightly larger for better visibility
+            0f, 0.6f, 0.6f,    // Top-right
+            0f, -0.6f, 0.6f,   // Bottom-right
+            0f, -0.6f, -0.6f,  // Bottom-left
+            0f, 0.6f, -0.6f,   // Top-left
         };
         private int sliceWidth;
 
@@ -221,7 +222,7 @@ namespace DeepBridgeWindowsApp
                 Text = "Show Extract Position",
                 ForeColor = Color.White,
                 AutoSize = true,
-                Checked = false
+                Checked = true  // Enable by default for better visibility
             };
             checkBox.CheckedChanged += (s, e) => gl.Invalidate();
 
@@ -267,8 +268,42 @@ namespace DeepBridgeWindowsApp
                 Anchor = AnchorStyles.Top | AnchorStyles.Right,
                 Visible = false  // Hide initially
             };
+            
+            // Add a button directly over the preview for quick access to annotation
+            var annotateButton = new Button
+            {
+                Text = "Annotate Carotids",
+                BackColor = Color.FromArgb(0, 120, 215),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Visible = false,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Size = new Size(120, 30)
+            };
+            
+            // Position the button at the bottom of the preview
+            slicePreview.Resize += (s, e) => {
+                annotateButton.Location = new Point(
+                    slicePreview.Location.X + (slicePreview.Width - annotateButton.Width) / 2,
+                    slicePreview.Location.Y + slicePreview.Height + 5
+                );
+            };
+            
+            // Show/hide the button with the preview
+            slicePreview.VisibleChanged += (s, e) => {
+                annotateButton.Visible = slicePreview.Visible;
+            };
+            
+            // Handle the click event
+            annotateButton.Click += (s, e) => {
+                if (slicePreview.Image != null)
+                {
+                    SaveSlice((Bitmap)slicePreview.Image);
+                }
+            };
 
             this.Controls.Add(slicePreview);
+            this.Controls.Add(annotateButton);
 
             // Ajouter les contrôles au FlowLayoutPanel
             flowPanel.Controls.Add(controlsLabel);
@@ -286,13 +321,32 @@ namespace DeepBridgeWindowsApp
 
         private void InitializeGLControl()
         {
-            gl = new GLControl { Dock = DockStyle.Fill };
-            gl.Resize += GLControl_Resize;
-            gl.MouseDown += GL_MouseDown;
-            gl.MouseUp += GL_MouseUp;
-            gl.MouseMove += GL_MouseMove;
-            gl.MouseWheel += GL_MouseWheel;
-            gl.Focus();
+            try
+            {
+                Console.WriteLine("Creating GLControl...");
+                
+                // In OpenTK 4.x, GLControl doesn't use GraphicsMode constructor parameters
+                // Instead, it uses the default setup which should work for most use cases
+                gl = new GLControl()
+                { 
+                    Dock = DockStyle.Fill 
+                };
+                
+                // Register event handlers
+                gl.Resize += GLControl_Resize;
+                gl.MouseDown += GL_MouseDown;
+                gl.MouseUp += GL_MouseUp;
+                gl.MouseMove += GL_MouseMove;
+                gl.MouseWheel += GL_MouseWheel;
+                
+                gl.Focus();
+                Console.WriteLine("GLControl created successfully");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error creating GLControl: {ex}");
+                throw new ApplicationException("Failed to create OpenGL control", ex);
+            }
         }
 
         private void InitializeProgressBar()
@@ -374,35 +428,148 @@ namespace DeepBridgeWindowsApp
 
         private Bitmap RotateImage(Bitmap original)
         {
-            var rotated = new Bitmap(original.Height, original.Width);
-            using (Graphics g = Graphics.FromImage(rotated))
+            if (original == null)
+                return null;
+                
+            if (original.Width < 1 || original.Height < 1)
             {
-                g.TranslateTransform(0, original.Width);
-                g.RotateTransform(-90);
-                g.DrawImage(original, 0, 0);
+                Console.WriteLine("Invalid bitmap dimensions for rotation");
+                return null;
             }
-            return rotated;
+                
+            try
+            {
+                // Use a safer approach to clone the bitmap
+                Bitmap clone = null;
+                try
+                {
+                    // Lock the original bitmap to ensure it's valid
+                    System.Drawing.Imaging.BitmapData bmpData = original.LockBits(
+                        new Rectangle(0, 0, original.Width, original.Height),
+                        System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                        original.PixelFormat);
+                        
+                    // Unlock immediately - this just verifies the bitmap is accessible
+                    original.UnlockBits(bmpData);
+                    
+                    // Create a new bitmap with swapped dimensions
+                    clone = new Bitmap(original.Height, original.Width, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error verifying bitmap for rotation: {ex.Message}");
+                    return null;
+                }
+                
+                // Use a graphics object to rotate and draw the image
+                using (Graphics g = Graphics.FromImage(clone))
+                {
+                    // Set high quality rendering
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                    g.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                    
+                    // Clear background
+                    g.Clear(Color.Black);
+                    
+                    // Apply rotation transform
+                    g.TranslateTransform(0, original.Width);
+                    g.RotateTransform(-90);
+                    
+                    // Draw the image with explicit rectangle to ensure bounds are correct
+                    g.DrawImage(original, 
+                        new Rectangle(0, 0, original.Width, original.Height),
+                        0, 0, original.Width, original.Height,
+                        GraphicsUnit.Pixel);
+                }
+                
+                return clone;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error rotating image: {ex}");
+                return null;
+            }
         }
 
         private void SaveSlice(Bitmap slice)
         {
-            using (SaveFileDialog saveDialog = new SaveFileDialog())
+            if (slice == null)
             {
-                saveDialog.Filter = "PNG Image|*.png|JPEG Image|*.jpg|Bitmap Image|*.bmp";
-                saveDialog.Title = "Save Slice Image";
-                saveDialog.DefaultExt = "png";
-
-                if (saveDialog.ShowDialog() == DialogResult.OK)
+                MessageBox.Show("Error: No slice image available to annotate", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            
+            try
+            {
+                Console.WriteLine($"SaveSlice called with bitmap: {slice.Width}x{slice.Height}, PixelFormat: {slice.PixelFormat}");
+                
+                // Open the annotation form before saving - let the form create its own copy
+                using (var annotationForm = new SliceAnnotationForm(slice))
                 {
-                    try
+                    if (annotationForm.ShowDialog() == DialogResult.OK)
                     {
-                        slice.Save(saveDialog.FileName);
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Error saving slice: {ex.Message}");
+                        try
+                        {
+                            // Get the annotated bitmap from the form
+                            Bitmap annotatedSlice = annotationForm.AnnotatedImage;
+                            
+                            if (annotatedSlice == null)
+                            {
+                                MessageBox.Show("Could not get annotated image", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                return;
+                            }
+                            
+                            using (SaveFileDialog saveDialog = new SaveFileDialog())
+                            {
+                                saveDialog.Filter = "PNG Image|*.png|JPEG Image|*.jpg|Bitmap Image|*.bmp";
+                                saveDialog.Title = "Save Annotated Slice Image";
+                                saveDialog.DefaultExt = "png";
+
+                                if (saveDialog.ShowDialog() == DialogResult.OK)
+                                {
+                                    try
+                                    {
+                                        // Use lossless PNG format for best quality
+                                        annotatedSlice.Save(saveDialog.FileName, ImageFormat.Png);
+                                        MessageBox.Show("Slice with carotid annotations saved successfully!", "Save Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"Error saving annotated slice: {ex}");
+                                        MessageBox.Show($"Error saving slice: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    }
+                                    finally
+                                    {
+                                        // Clean up the bitmap
+                                        if (annotatedSlice != null)
+                                        {
+                                            annotatedSlice.Dispose();
+                                            annotatedSlice = null;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error in annotation process: {ex}");
+                            MessageBox.Show($"Error processing annotated image: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error opening annotation form: {ex}");
+                MessageBox.Show($"Error opening annotation form: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                // Force garbage collection
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
             }
         }
 
@@ -417,42 +584,250 @@ namespace DeepBridgeWindowsApp
                     sliceButton.Text = "Processing...";
                     Cursor = Cursors.WaitCursor;
 
+                    // Report memory usage before extraction
+                    long beforeMem = GC.GetTotalMemory(true) / (1024 * 1024);
+                    Console.WriteLine($"Memory before slice extraction: {beforeMem} MB");
+
                     // Convert pixel position to normalized coordinate for ExtractSlice
                     float normalizedPos = ((float)slicePosition.Value / (sliceWidth - 1)) - 0.5f;
 
                     Console.WriteLine($"Extracting slice at pixel row: {slicePosition.Value} (normalized: {normalizedPos})");
-                    var slice = await Task.Run(() => render.ExtractSlice(normalizedPos));
+                    
+                    // Use our optimized memory-efficient extraction
+                    Bitmap slice = null;
+                    try 
+                    {
+                        slice = await Task.Run(() => 
+                        {
+                            // Force a garbage collection before the operation
+                            GC.Collect();
+                            GC.WaitForPendingFinalizers();
+                            
+                            return render.ExtractSlice(normalizedPos);
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Error extracting slice: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
 
                     if (slice != null)
                     {
-                        // If there's an existing image, dispose it
-                        if (slicePreview.Image != null)
+                        try
                         {
-                            var oldImage = slicePreview.Image;
-                            slicePreview.Image = null;
-                            oldImage.Dispose();
+                            // If there's an existing image, dispose it to free memory
+                            if (slicePreview.Image != null)
+                            {
+                                var oldImage = slicePreview.Image;
+                                slicePreview.Image = null;
+                                oldImage.Dispose();
+                            }
+
+                            // Rotate the slice - make sure we dispose the original after
+                            Bitmap rotatedSlice = null;
+                            try
+                            {
+                                rotatedSlice = RotateImage(slice);
+                            }
+                            finally
+                            {
+                                // Dispose the original slice to free memory
+                                if (slice != null)
+                                {
+                                    slice.Dispose();
+                                    slice = null;
+                                }
+                            }
+
+                            if (rotatedSlice != null)
+                            {
+                                // Resize preview area
+                                slicePreview.Width = rotatedSlice.Width + 10;
+                                slicePreview.Height = rotatedSlice.Height + 10;
+                                slicePreview.Location = new Point(
+                                    this.ClientSize.Width - slicePreview.Width - 10,
+                                    10
+                                );
+
+                                // Set the new image and show the preview
+                                slicePreview.Image = rotatedSlice;
+                                slicePreview.Visible = true;
+
+                                // Remove any existing annotation buttons to avoid duplicates
+                                foreach (Control c in this.Controls)
+                                {
+                                    if (c is Button btn && btn.Text == "Annotate Carotids")
+                                    {
+                                        this.Controls.Remove(c);
+                                        btn.Dispose();
+                                    }
+                                }
+                                
+                                // Create a prominent annotation button that's VERY visible
+                                Button annotateButton = new Button
+                                {
+                                    Text = "Annotate Carotids",
+                                    BackColor = Color.FromArgb(0, 120, 215),
+                                    ForeColor = Color.White,
+                                    Font = new Font("Arial", 12, FontStyle.Bold),
+                                    Width = 180,
+                                    Height = 50,
+                                    FlatStyle = FlatStyle.Flat,
+                                    Visible = true,
+                                    Cursor = Cursors.Hand,
+                                    Name = "annotateCarotidsButton"  // Give it a name for later reference
+                                };
+                                
+                                // Add a distinctive border to make it stand out
+                                annotateButton.FlatAppearance.BorderSize = 3;
+                                annotateButton.FlatAppearance.BorderColor = Color.Yellow;
+                                
+                                // Position the button below the preview
+                                annotateButton.Location = new Point(
+                                    slicePreview.Location.X + (slicePreview.Width - annotateButton.Width) / 2,
+                                    slicePreview.Location.Y + slicePreview.Height + 10
+                                );
+                                
+                                // Handle click to open annotation dialog
+                                annotateButton.Click += (s, args) => {
+                                    // Simplified approach - don't create a copy here, pass reference directly
+                                    // The SaveSlice method will handle the copy internally
+                                    try
+                                    {
+                                        if (slicePreview.Image != null)
+                                        {
+                                            SaveSlice((Bitmap)slicePreview.Image);
+                                        }
+                                        else
+                                        {
+                                            MessageBox.Show("No image available to annotate", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"Error in annotation button click: {ex}");
+                                        MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    }
+                                };
+                                
+                                // Add tooltip
+                                var toolTip = new ToolTip();
+                                toolTip.SetToolTip(annotateButton, "Click to mark carotid positions for AI training");
+                                
+                                // Add button to form
+                                this.Controls.Add(annotateButton);
+                                annotateButton.BringToFront();
+                                
+                                // Also create a context menu for right-click options
+                                var saveMenu = new ContextMenuStrip();
+                                
+                                // Add option to annotate the slice for carotid positions
+                                var annotateItem = new ToolStripMenuItem("Annotate and Save...");
+                                annotateItem.Click += (s, args) => {
+                                    try
+                                    {
+                                        if (slicePreview.Image != null)
+                                        {
+                                            SaveSlice((Bitmap)slicePreview.Image);
+                                        }
+                                        else
+                                        {
+                                            MessageBox.Show("No image available to annotate", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"Error in context menu click: {ex}");
+                                        MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    }
+                                };
+                                annotateItem.Font = new Font(annotateItem.Font, FontStyle.Bold); // Make it stand out
+                                saveMenu.Items.Add(annotateItem);
+                                
+                                // Also keep the original save option
+                                var saveItem = new ToolStripMenuItem("Save Without Annotations...");
+                                saveItem.Click += (s, args) => {
+                                    try
+                                    {
+                                        // Direct save without annotation
+                                        if (slicePreview.Image != null)
+                                        {
+                                            using (SaveFileDialog saveDialog = new SaveFileDialog())
+                                            {
+                                                saveDialog.Filter = "PNG Image|*.png|JPEG Image|*.jpg|Bitmap Image|*.bmp";
+                                                saveDialog.Title = "Save Slice Image";
+                                                saveDialog.DefaultExt = "png";
+
+                                                if (saveDialog.ShowDialog() == DialogResult.OK)
+                                                {
+                                                    try
+                                                    {
+                                                        // Save directly using the image format based on extension
+                                                        string ext = System.IO.Path.GetExtension(saveDialog.FileName).ToLower();
+                                                        ImageFormat format = ImageFormat.Png; // Default to PNG
+                                                        
+                                                        if (ext == ".jpg" || ext == ".jpeg")
+                                                            format = ImageFormat.Jpeg;
+                                                        else if (ext == ".bmp")
+                                                            format = ImageFormat.Bmp;
+                                                            
+                                                        slicePreview.Image.Save(saveDialog.FileName, format);
+                                                        
+                                                        MessageBox.Show("Slice saved successfully!", "Save Complete", 
+                                                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                                    }
+                                                    catch (Exception ex)
+                                                    {
+                                                        Console.WriteLine($"Error saving slice: {ex}");
+                                                        MessageBox.Show($"Error saving slice: {ex.Message}", "Error", 
+                                                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        else
+                                        {
+                                            MessageBox.Show("No image available to save", "Error", 
+                                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"Error in save menu click: {ex}");
+                                        MessageBox.Show($"Error: {ex.Message}", "Error", 
+                                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    }
+                                };
+                                saveMenu.Items.Add(saveItem);
+                                
+                                slicePreview.ContextMenuStrip = saveMenu;
+                                
+                                // Show a notification to the user that the annotation option is available
+                                MessageBox.Show(
+                                    "Slice extracted successfully. Click 'Annotate Carotids' button to mark carotids for AI training.",
+                                    "Slice Ready",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Information);
+                                
+                                // Force cleanup
+                                GC.Collect();
+                                GC.WaitForPendingFinalizers();
+                                
+                                // Report memory usage after extraction
+                                long afterMem = GC.GetTotalMemory(true) / (1024 * 1024);
+                                Console.WriteLine($"Memory after slice extraction: {afterMem} MB");
+                                Console.WriteLine($"Memory change: {afterMem - beforeMem} MB");
+                            }
+                            else
+                            {
+                                MessageBox.Show("Failed to rotate slice image.");
+                            }
                         }
-
-                        var rotatedSlice = RotateImage(slice);
-                        //slice.Dispose(); // Dispose the original slice
-
-                        slicePreview.Width = rotatedSlice.Width + 10;
-                        slicePreview.Height = rotatedSlice.Height + 10;
-                        slicePreview.Location = new Point(
-                            this.ClientSize.Width - slicePreview.Width - 10,
-                            10
-                        );
-
-                        // Set the new image and show the preview
-                        slicePreview.Image = rotatedSlice;
-                        slicePreview.Visible = true;
-
-                        // Optional: Add a save button or right-click menu
-                        var saveMenu = new ContextMenuStrip();
-                        var saveItem = new ToolStripMenuItem("Save Slice...");
-                        saveItem.Click += (s, args) => SaveSlice(slice);
-                        saveMenu.Items.Add(saveItem);
-                        slicePreview.ContextMenuStrip = saveMenu;
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show($"Error processing slice: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
                     }
                     else
                     {
@@ -461,7 +836,7 @@ namespace DeepBridgeWindowsApp
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show($"Error extracting slice: {ex.Message}");
+                    MessageBox.Show($"Error extracting slice: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
                 finally
                 {
@@ -473,46 +848,226 @@ namespace DeepBridgeWindowsApp
             }
         }
 
+        // Memory usage monitoring label
+        private Label memoryUsageLabel;
+        
         private async void RenderDicomForm_Load(object sender, EventArgs e)
         {
             Console.WriteLine("Loading 3D render...");
             ShowProgress(true);
-
+            
             try
             {
-                await Task.Run(() =>
+                // Add memory usage monitoring with 8GB limit warning
+                memoryUsageLabel = new Label
                 {
-                    this.Invoke((MethodInvoker)delegate
+                    AutoSize = true,
+                    BackColor = Color.Black,
+                    ForeColor = Color.LimeGreen,
+                    Text = "Memory: Initializing...",
+                    Location = new Point(10, 10),
+                    Font = new Font("Arial", 9, FontStyle.Bold)
+                };
+                this.Controls.Add(memoryUsageLabel);
+                
+                // Start memory monitoring timer with less frequent updates
+                var memoryTimer = new System.Windows.Forms.Timer
+                {
+                    Interval = 5000  // Update less frequently (every 5 seconds)
+                };
+                memoryTimer.Tick += (s, ev) =>
+                {
+                    try
                     {
-                        InitializeOpenGL();
-                        gl.Focus();
-                    });
+                        // Get current memory usage
+                        long usedMemory = GC.GetTotalMemory(false) / (1024 * 1024);
+                        
+                        // Set color based on memory usage (green->yellow->red as memory increases)
+                        if (usedMemory > 6000) // Over 6GB is critical with 8GB limit
+                        {
+                            memoryUsageLabel.ForeColor = Color.Red;
+                            memoryUsageLabel.Text = $"WARNING! Memory: {usedMemory} MB";
+                            
+                            // Force garbage collection when close to limit
+                            GC.Collect(2, GCCollectionMode.Forced);
+                            GC.WaitForPendingFinalizers();
+                        }
+                        else if (usedMemory > 4000) // Over 4GB is warning level
+                        {
+                            memoryUsageLabel.ForeColor = Color.Yellow;
+                            memoryUsageLabel.Text = $"Memory: {usedMemory} MB";
+                            
+                            // Gentle collection when approaching high memory
+                            GC.Collect(0, GCCollectionMode.Optimized);
+                        }
+                        else
+                        {
+                            memoryUsageLabel.ForeColor = Color.LimeGreen;
+                            memoryUsageLabel.Text = $"Memory: {usedMemory} MB";
+                        }
+                    }
+                    catch (Exception timerEx)
+                    {
+                        Console.WriteLine($"Error in memory timer: {timerEx.Message}");
+                    }
+                };
+                memoryTimer.Start();
 
+                // Force garbage collection before starting
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                
+                long startMemory = GC.GetTotalMemory(true) / (1024 * 1024);
+                Console.WriteLine($"Memory before 3D initialization: {startMemory} MB");
+                
+                bool openGlInitialized = false;
+                
+                try
+                {
+                    // First, initialize OpenGL synchronously to catch any immediate errors
+                    Console.WriteLine("Initializing OpenGL...");
+                    InitializeOpenGL();
+                    openGlInitialized = true;
+                    Console.WriteLine("OpenGL initialized successfully");
+                }
+                catch (Exception glEx)
+                {
+                    Console.WriteLine($"Error initializing OpenGL: {glEx}");
+                    MessageBox.Show($"Error initializing OpenGL: {glEx.Message}", "OpenGL Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;  // Exit early
+                }
+                
+                if (!openGlInitialized)
+                {
+                    MessageBox.Show("Failed to initialize OpenGL. The application will now exit.", "Critical Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;  // Exit early
+                }
+                
+                gl.Focus();
+                
+                try
+                {
+                    // Create the 3D renderer with our ultra-lightweight approach
+                    Console.WriteLine("Creating Dicom3D instance...");
                     this.render = new Dicom3D(this.ddm, UpdateProgress);
-
-                    this.Invoke((MethodInvoker)delegate
-                    {
-                        InitializeShaders();
-                        render.InitializeGL();
-                        ShowProgress(false);
-                        gl.Invalidate();
-                        gl.Focus();
-                    });
+                    Console.WriteLine("Dicom3D instance created successfully");
+                }
+                catch (Exception renderEx)
+                {
+                    Console.WriteLine($"Error creating 3D renderer: {renderEx}");
+                    MessageBox.Show($"Error creating 3D renderer: {renderEx.Message}", "Renderer Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;  // Exit early
+                }
+                
+                try
+                {
+                    Console.WriteLine("Initializing shaders...");
+                    InitializeShaders();
+                    Console.WriteLine("Shaders initialized successfully");
+                }
+                catch (Exception shaderEx)
+                {
+                    Console.WriteLine($"Error initializing shaders: {shaderEx}");
+                    MessageBox.Show($"Error initializing shaders: {shaderEx.Message}", "Shader Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;  // Exit early
+                }
+                
+                try
+                {
+                    Console.WriteLine("Initializing renderer GL resources...");
+                    render.InitializeGL();
+                    Console.WriteLine("Renderer GL resources initialized successfully");
+                }
+                catch (Exception rendererGlEx)
+                {
+                    Console.WriteLine($"Error initializing renderer GL resources: {rendererGlEx}");
+                    MessageBox.Show($"Error initializing renderer GL resources: {rendererGlEx.Message}", "Renderer GL Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;  // Exit early
+                }
+                
+                // Setup paint handler
+                try
+                {
+                    Console.WriteLine("Setting up GL paint handler...");
                     gl.Paint += GLControl_Paint;
-                });
+                    Console.WriteLine("GL paint handler set up successfully");
+                }
+                catch (Exception paintEx)
+                {
+                    Console.WriteLine($"Error setting up paint handler: {paintEx}");
+                }
+                
+                ShowProgress(false);
+                gl.Invalidate();
+                gl.Focus();
+                
+                // Force cleanup after initialization
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                
+                long endMemory = GC.GetTotalMemory(true) / (1024 * 1024);
+                Console.WriteLine($"Memory after 3D initialization: {endMemory} MB");
+                Console.WriteLine($"Memory used by 3D renderer: {endMemory - startMemory} MB");
+                
+                // Update memory label
+                memoryUsageLabel.Text = $"Memory: {endMemory} MB";
+                
+                // Bring the memory label to front so it's always visible
+                memoryUsageLabel.BringToFront();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error initializing 3D render: {ex.Message}");
+                Console.WriteLine($"Error in RenderDicomForm_Load: {ex}");
+                MessageBox.Show($"Error initializing 3D render: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ShowProgress(false);
             }
         }
 
         private void InitializeOpenGL()
         {
-            gl.MakeCurrent();
-            GL.ClearColor(Color.Black);
-            GL.Enable(EnableCap.DepthTest);
-            GL.Enable(EnableCap.Texture2D);
+            try
+            {
+                Console.WriteLine("Making OpenGL context current...");
+                gl.MakeCurrent();
+                
+                // Print OpenGL information
+                Console.WriteLine($"OpenGL version: {GL.GetString(StringName.Version)}");
+                Console.WriteLine($"OpenGL vendor: {GL.GetString(StringName.Vendor)}");
+                Console.WriteLine($"OpenGL renderer: {GL.GetString(StringName.Renderer)}");
+                
+                // Set clear color
+                GL.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);  // Black
+                
+                // Enable depth testing
+                GL.Enable(EnableCap.DepthTest);
+                
+                // Safer texture initialization
+                try
+                {
+                    GL.Enable(EnableCap.Texture2D);
+                }
+                catch (Exception texEx)
+                {
+                    Console.WriteLine($"Warning: Could not enable Texture2D: {texEx.Message}");
+                    // Continue anyway - this might not be critical
+                }
+                
+                // Check for OpenGL errors
+                ErrorCode error = GL.GetError();
+                if (error != ErrorCode.NoError)
+                {
+                    Console.WriteLine($"OpenGL error after initialization: {error}");
+                }
+                else
+                {
+                    Console.WriteLine("OpenGL initialized without errors");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in InitializeOpenGL: {ex}");
+                throw;
+            }
         }
 
         private void ShowProgress(bool visible)
@@ -700,47 +1255,148 @@ namespace DeepBridgeWindowsApp
 
         private void GLControl_Paint(object sender, PaintEventArgs e)
         {
-            gl.MakeCurrent();
-            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-            GL.UseProgram(shaderProgram);
-            float aspect = (float)gl.ClientSize.Width / gl.ClientSize.Height;
-            Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.PiOver4, aspect, 0.1f, 100f);
-            Matrix4 view = Matrix4.LookAt(cameraPosition, cameraTarget, cameraUp);
-            Matrix4 model = Matrix4.Identity;
-
-            model *= Matrix4.CreateRotationX(MathHelper.DegreesToRadians(rotationX));
-            model *= Matrix4.CreateRotationY(MathHelper.DegreesToRadians(rotationY));
-
-            float scaleFactor = 1.0f;
-            model *= Matrix4.CreateScale(scaleFactor);
-
-            Vector3 centerOffset = new Vector3(0f, 0f, 0f);
-            model *= Matrix4.CreateTranslation(centerOffset);
-
-            int modelLoc = GL.GetUniformLocation(shaderProgram, "model");
-            int viewLoc = GL.GetUniformLocation(shaderProgram, "view");
-            int projLoc = GL.GetUniformLocation(shaderProgram, "projection");
-
-            GL.UniformMatrix4(modelLoc, false, ref model);
-            GL.UniformMatrix4(viewLoc, false, ref view);
-            GL.UniformMatrix4(projLoc, false, ref projection);
-
-            render.Render(shaderProgram, model, view, projection);
+            // Check if GL context is valid and all GL resources are initialized
+            if (gl == null || render == null || shaderProgram <= 0)
+            {
+                Console.WriteLine("Skipping paint - GL resources not fully initialized");
+                return;
+            }
             
-            DrawBoundingBox(model, view, projection);
-            DrawSliceIndicator(model, view, projection);
-
-            gl.SwapBuffers();
+            try
+            {
+                // Make OpenGL context current
+                gl.MakeCurrent();
+                
+                // Set a solid black background
+                GL.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                
+                // Clear the buffers
+                GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+                
+                // Use our main shader program
+                GL.UseProgram(shaderProgram);
+                
+                // Check for any errors after setting shader program
+                ErrorCode error = GL.GetError();
+                if (error != ErrorCode.NoError)
+                {
+                    Console.WriteLine($"OpenGL error after setting shader program: {error}");
+                    return;
+                }
+                
+                // Calculate aspect ratio safely
+                float aspect = 1.0f;  // Default to 1.0 if dimensions are invalid
+                if (gl.ClientSize.Width > 0 && gl.ClientSize.Height > 0)
+                {
+                    aspect = (float)gl.ClientSize.Width / gl.ClientSize.Height;
+                }
+                
+                // Create projection matrix
+                Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(
+                    MathHelper.PiOver4,  // 45 degrees field of view
+                    aspect,              // Aspect ratio
+                    0.1f,                // Near plane
+                    100f                 // Far plane
+                );
+                
+                // Create view matrix from camera position
+                Matrix4 view = Matrix4.LookAt(
+                    cameraPosition,      // Eye position
+                    cameraTarget,        // Look target
+                    cameraUp             // Up vector
+                );
+                
+                // Create model matrix
+                Matrix4 model = Matrix4.Identity;
+                
+                // Apply rotations
+                model *= Matrix4.CreateRotationX(MathHelper.DegreesToRadians(rotationX));
+                model *= Matrix4.CreateRotationY(MathHelper.DegreesToRadians(rotationY));
+                
+                // Apply scale - increase size for better visibility
+                float scaleFactor = 1.25f;  // Reduced from 1.5f for performance
+                model *= Matrix4.CreateScale(scaleFactor);
+                
+                // Apply translation
+                Vector3 centerOffset = new Vector3(0f, 0f, 0f);
+                model *= Matrix4.CreateTranslation(centerOffset);
+                
+                // Get uniform locations
+                int modelLoc = GL.GetUniformLocation(shaderProgram, "model");
+                int viewLoc = GL.GetUniformLocation(shaderProgram, "view");
+                int projLoc = GL.GetUniformLocation(shaderProgram, "projection");
+                
+                // Set matrix uniforms
+                GL.UniformMatrix4(modelLoc, false, ref model);
+                GL.UniformMatrix4(viewLoc, false, ref view);
+                GL.UniformMatrix4(projLoc, false, ref projection);
+                
+                // Check for any errors after setting uniforms
+                error = GL.GetError();
+                if (error != ErrorCode.NoError)
+                {
+                    Console.WriteLine($"OpenGL error after setting matrix uniforms: {error}");
+                    return;
+                }
+                
+                // Enable alpha blending for better point visibility
+                GL.Enable(EnableCap.Blend);
+                GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                
+                // Enable point smoothing/anti-aliasing if available
+                GL.Enable(EnableCap.PointSmooth);
+                
+                // Render the DICOM 3D data
+                render.Render(shaderProgram, model, view, projection);
+                
+                error = GL.GetError();
+                if (error != ErrorCode.NoError)
+                {
+                    Console.WriteLine($"OpenGL error after rendering: {error}");
+                    // Continue anyway - we can still try to draw other elements
+                }
+                
+                // Draw additional helpers
+                try
+                {
+                    DrawBoundingBox(model, view, projection);
+                    DrawSliceIndicator(model, view, projection);
+                }
+                catch (Exception helperEx)
+                {
+                    Console.WriteLine($"Error drawing helpers: {helperEx.Message}");
+                }
+                
+                // Swap the buffers to display the rendered image
+                gl.SwapBuffers();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in GLControl_Paint: {ex}");
+            }
         }
 
         private void DrawBoundingBox(Matrix4 model, Matrix4 view, Matrix4 projection)
         {
+            // Save current OpenGL state
+            bool depthTestEnabled = GL.IsEnabled(EnableCap.DepthTest);
+            if (depthTestEnabled)
+                GL.Disable(EnableCap.DepthTest);  // Make sure box is always visible
+                
             GL.UseProgram(ColorShaderProgram);
 
+            // Use the shader program for colored lines
             GL.UniformMatrix4(GL.GetUniformLocation(ColorShaderProgram, "model"), false, ref model);
             GL.UniformMatrix4(GL.GetUniformLocation(ColorShaderProgram, "view"), false, ref view);
             GL.UniformMatrix4(GL.GetUniformLocation(ColorShaderProgram, "projection"), false, ref projection);
-            GL.Uniform3(GL.GetUniformLocation(ColorShaderProgram, "color"), 1.0f, 0.0f, 0.0f); // Red color
+            
+            // Bright red color for better visibility
+            GL.Uniform3(GL.GetUniformLocation(ColorShaderProgram, "color"), 1.0f, 0.0f, 0.0f);
+            
+            // Set line width to make it more visible
+            float originalLineWidth;
+            GL.GetFloat(GetPName.LineWidth, out originalLineWidth);
+            GL.LineWidth(2.0f);  // Thicker lines for better visibility
 
             GL.Begin(PrimitiveType.Lines);
 
@@ -763,44 +1419,121 @@ namespace DeepBridgeWindowsApp
             GL.Vertex3(-0.5f, -0.5f, 0.5f); GL.Vertex3(-0.5f, 0.5f, 0.5f);
 
             GL.End();
+            
+            // Restore original line width
+            GL.LineWidth(originalLineWidth);
+            
+            // Restore depth testing if it was enabled
+            if (depthTestEnabled)
+                GL.Enable(EnableCap.DepthTest);
+                
             GL.UseProgram(shaderProgram);
         }
 
+        // Track last position to reduce logging
+        private static int lastSlicePosition = -1;
+        
         private void DrawSliceIndicator(Matrix4 model, Matrix4 view, Matrix4 projection)
         {
+            // Always show the slice indicator when checkbox is checked
             if (!checkBox.Checked) return;
-
+            
+            // Log only when position changes to reduce console spam
+            if (lastSlicePosition != (int)slicePosition.Value)
+            {
+                Console.WriteLine($"Drawing slice plane at position: {slicePosition.Value}");
+                lastSlicePosition = (int)slicePosition.Value;
+            }
+            
+            // Save current OpenGL state
+            bool depthTestEnabled = GL.IsEnabled(EnableCap.DepthTest);
+            bool blendEnabled = GL.IsEnabled(EnableCap.Blend);
+            
+            // Disable depth test so slice plane is always visible
+            GL.Disable(EnableCap.DepthTest);
+            
+            // Enable blending for semi-transparency
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            
             GL.UseProgram(ColorShaderProgram);
 
             // Convert pixel position to normalized coordinate for rendering
             float normalizedPos = ((float)slicePosition.Value / (sliceWidth - 1)) - 0.5f;
 
-            // Create slice position matrix
-            Matrix4 sliceModel = model * Matrix4.CreateTranslation(normalizedPos, 0, 0);
+            // Create a separate model matrix for the slice plane that only includes the translation on X axis
+            Matrix4 sliceModel = Matrix4.Identity;
+            sliceModel *= Matrix4.CreateTranslation(normalizedPos, 0, 0);
+            
+            // Multiply by the original model's rotation component only
+            // Extract rotation from model matrix by zeroing out translation
+            Matrix4 rotationOnly = model;
+            rotationOnly.Row3.X = 0;
+            rotationOnly.Row3.Y = 0;
+            rotationOnly.Row3.Z = 0;
+            
+            sliceModel *= rotationOnly;
 
             // Set uniforms
             GL.UniformMatrix4(GL.GetUniformLocation(ColorShaderProgram, "model"), false, ref sliceModel);
             GL.UniformMatrix4(GL.GetUniformLocation(ColorShaderProgram, "view"), false, ref view);
             GL.UniformMatrix4(GL.GetUniformLocation(ColorShaderProgram, "projection"), false, ref projection);
 
-            // Set color to semi-transparent red
-            GL.Enable(EnableCap.Blend);
-            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-            GL.Uniform3(GL.GetUniformLocation(ColorShaderProgram, "color"), 1.0f, 0.0f, 0.0f);
-
-            // Draw the quad
-            GL.Begin(PrimitiveType.Quads);
-            for (int i = 0; i < sliceIndicatorVertices.Length; i += 3)
-            {
-                GL.Vertex3(
-                    sliceIndicatorVertices[i],
-                    sliceIndicatorVertices[i + 1],
-                    sliceIndicatorVertices[i + 2]
-                );
-            }
+            // Use a very thick line width for better visibility
+            float originalLineWidth;
+            GL.GetFloat(GetPName.LineWidth, out originalLineWidth);
+            GL.LineWidth(8.0f);  // Extra thick lines
+            
+            // Draw crosshairs at the slice position - makes it much more visible
+            GL.Begin(PrimitiveType.Lines);
+            
+            // Vertical line (red)
+            GL.Uniform3(GL.GetUniformLocation(ColorShaderProgram, "color"), 1.0f, 0.0f, 0.0f); // Red
+            GL.Vertex3(0.0f, -0.7f, 0.0f);
+            GL.Vertex3(0.0f, 0.7f, 0.0f);
+            
+            // Horizontal line (green)
+            GL.Uniform3(GL.GetUniformLocation(ColorShaderProgram, "color"), 0.0f, 1.0f, 0.0f); // Green
+            GL.Vertex3(0.0f, 0.0f, -0.7f);
+            GL.Vertex3(0.0f, 0.0f, 0.7f);
+            
             GL.End();
-
-            GL.Disable(EnableCap.Blend);
+            
+            // Draw slice plane as filled quad with semi-transparency
+            GL.Uniform3(GL.GetUniformLocation(ColorShaderProgram, "color"), 1.0f, 1.0f, 0.0f); // Yellow
+            
+            // Make the slice plane MUCH more visible by making it completely opaque
+            GL.BlendFunc(BlendingFactor.One, BlendingFactor.Zero);
+            
+            GL.Begin(PrimitiveType.Quads);
+            // Make the plane larger for better visibility
+            GL.Vertex3(0.0f, 0.8f, 0.8f);    // Top-right
+            GL.Vertex3(0.0f, -0.8f, 0.8f);   // Bottom-right
+            GL.Vertex3(0.0f, -0.8f, -0.8f);  // Bottom-left
+            GL.Vertex3(0.0f, 0.8f, -0.8f);   // Top-left
+            GL.End();
+            
+            // Restore normal blending
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            
+            // Draw outline for better visibility
+            GL.Uniform3(GL.GetUniformLocation(ColorShaderProgram, "color"), 1.0f, 0.5f, 0.0f); // Orange
+            GL.LineWidth(10.0f); // Make outline thicker
+            GL.Begin(PrimitiveType.LineLoop);
+            GL.Vertex3(0.0f, 0.8f, 0.8f);    // Top-right
+            GL.Vertex3(0.0f, -0.8f, 0.8f);   // Bottom-right
+            GL.Vertex3(0.0f, -0.8f, -0.8f);  // Bottom-left
+            GL.Vertex3(0.0f, 0.8f, -0.8f);   // Top-left
+            GL.End();
+            
+            // Restore OpenGL state
+            GL.LineWidth(originalLineWidth);
+            
+            if (depthTestEnabled)
+                GL.Enable(EnableCap.DepthTest);
+            if (!blendEnabled)
+                GL.Disable(EnableCap.Blend);
+                
             GL.UseProgram(shaderProgram);
         }
 

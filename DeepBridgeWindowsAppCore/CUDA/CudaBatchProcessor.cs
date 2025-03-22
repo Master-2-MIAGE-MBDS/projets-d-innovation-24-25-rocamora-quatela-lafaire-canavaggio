@@ -11,7 +11,7 @@ namespace DeepBridgeWindowsApp.CUDA
     public class CudaBatchProcessor : IDisposable
     {
         private const int BATCH_SIZE = 100;
-        private const int MAX_GPU_MEMORY = 4 * 1024 * 1024 * 1024; // 4GB
+        private const long MAX_GPU_MEMORY = 4L * 1024L * 1024L * 1024L; // 4GB
         private readonly Context context;
 
         // L'accélérateur est maintenant public pour permettre l'accès depuis DicomImageProcessor

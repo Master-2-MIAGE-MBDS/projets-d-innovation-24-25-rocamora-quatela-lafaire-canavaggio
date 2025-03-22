@@ -256,6 +256,12 @@ namespace DeepBridgeWindowsApp
             {
                 Console.WriteLine("Nettoyage des ressources de la visionneuse DICOM...");
                 
+                // Dispose of designer components
+                if (components != null)
+                {
+                    components.Dispose();
+                }
+                
                 // Dispose of images
                 mainPictureBox.Image?.Dispose();
                 

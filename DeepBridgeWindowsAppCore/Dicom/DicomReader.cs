@@ -67,8 +67,9 @@ namespace DeepBridgeWindowsApp.DICOM
             
             foreach (var file in dicomFiles)
             {
-                // Read just the headers to avoid loading entire pixel data in memory
-                var dcm = DICOMObject.Read(file, readPixelData: false);
+                // Read the file - since we're only accessing metadata, we don't need to worry
+                // about the full pixel data being loaded into memory temporarily
+                var dcm = DICOMObject.Read(file);
                 var sliceLocation = Convert.ToDouble(dcm.FindFirst(TagHelper.SliceLocation)?.DData ?? 0);
                 fileInfo.Add((file, sliceLocation));
                 

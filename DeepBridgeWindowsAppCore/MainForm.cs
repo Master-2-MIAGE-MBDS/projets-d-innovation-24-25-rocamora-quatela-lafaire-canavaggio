@@ -324,6 +324,12 @@ namespace DeepBridgeWindowsApp
         {
             if (disposing)
             {
+                // Clean up designer-generated components
+                if (components != null)
+                {
+                    components.Dispose();
+                }
+                
                 // Clean up resources
                 CleanupCurrentResources();
                 globalViewPictureBox?.Dispose();
