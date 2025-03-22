@@ -28,9 +28,9 @@ namespace DeepBridgeWindowsApp.Dicom
     public class Dicom3D : IDisposable
     {
         // Constants for memory optimization
-        private const int MAX_VISIBLE_SLICES = 30;  // Increased from 15 to avoid gaps between slices
-        private const float INTENSITY_THRESHOLD = 0.18f;  // Increased from 0.15f to filter more background
-        private const int SAMPLE_RATE = 5;  // Increased from 3 to reduce point count and memory usage
+        private const int MAX_VISIBLE_SLICES = 60;  // Increased to ensure all slices are visible without gaps
+        private const float INTENSITY_THRESHOLD = 0.15f;  // Threshold for detecting non-background pixels
+        private const int SAMPLE_RATE = 3;  // Reduced sampling rate for higher point density
         
         // OpenGL resources
         private int[] vertexBufferObject;
@@ -274,37 +274,44 @@ namespace DeepBridgeWindowsApp.Dicom
             }
             else
             {
-                // Select consecutive slices instead of distributed ones to eliminate gaps
-                // This ensures all slices stick together without gaps
+                // Select ALL available slices to completely eliminate gaps
+                // Gaps occur when we don't process enough consecutive slices
                 
-                // If we need to select a smaller number of slices, bias selection toward important parts
-                // (either front, middle, or back depending on camera position)
+                // Process ALL slices if possible to eliminate gaps
+                // If we can't process all slices, distribute them evenly
                 int startIndex;
+                int stepSize = 1;
                 
-                if (normalizedCameraZ < 0.33f)
-                {
-                    // Bias toward front of volume
-                    startIndex = minSlice;
-                }
-                else if (normalizedCameraZ > 0.66f)
-                {
-                    // Bias toward back of volume
-                    startIndex = Math.Max(minSlice, maxSlice - slicesToSelect + 1);
-                }
-                else
-                {
-                    // Bias toward middle of volume
-                    int middleSlice = (minSlice + maxSlice) / 2;
-                    startIndex = Math.Max(minSlice, Math.Min(maxSlice - slicesToSelect + 1, middleSlice - slicesToSelect / 2));
+                if (sliceRange > slicesToSelect) {
+                    // Calculate appropriate step to distribute slices evenly through the volume
+                    stepSize = Math.Max(1, sliceRange / slicesToSelect);
+                    Console.WriteLine($"Using step size {stepSize} to distribute {slicesToSelect} slices across {sliceRange} range");
                 }
                 
-                // Add consecutive slices
-                for (int i = 0; i < slicesToSelect; i++)
+                // Start from the minimum slice
+                startIndex = minSlice;
+                
+                // Add evenly distributed slices to ensure whole volume coverage without gaps
+                for (int i = 0; i < sliceRange; i += stepSize)
                 {
                     int sliceIndex = startIndex + i;
-                    if (sliceIndex <= maxSlice)
+                    if (sliceIndex <= maxSlice && selectedSlices.Count < slicesToSelect)
                     {
                         selectedSlices.Add(sliceIndex);
+                    }
+                }
+                
+                // If we didn't add enough slices, add more until we reach the target
+                while (selectedSlices.Count < slicesToSelect && selectedSlices.Count < sliceRange)
+                {
+                    // Find gaps and fill them
+                    for (int i = minSlice; i <= maxSlice && selectedSlices.Count < slicesToSelect; i++)
+                    {
+                        if (!selectedSlices.Contains(i))
+                        {
+                            selectedSlices.Add(i);
+                            break;
+                        }
                     }
                 }
                 
@@ -336,8 +343,8 @@ namespace DeepBridgeWindowsApp.Dicom
             try
             {
                 Console.WriteLine($"Processing slice {z}/{totalSlices}");
-                // Calculate normalized z position - remove the 0.5f offset to make slices stick together
-                float normalizedZ = (z - frontClip) / (float)(totalSlices - frontClip - backClip) - 0.5f;
+                // Calculate normalized z position without offset to make slices stick together
+                float normalizedZ = (z - frontClip) / (float)(totalSlices - frontClip - backClip);
                 
                 // Use actual slice location for more accurate physical positioning in Z direction
                 if (physicalDepth > 0)
@@ -345,13 +352,16 @@ namespace DeepBridgeWindowsApp.Dicom
                     float sliceLocation = 0;
                     try {
                         sliceLocation = (float)dicomDisplayManager.GetSlice(z).SliceLocation;
-                        // Calculate exact physical position based on actual slice location
-                        normalizedZ = (sliceLocation - firstSliceLocation) / physicalDepth - 0.5f;
+                        // Calculate exact physical position based on actual slice location without subtraction
+                        normalizedZ = (sliceLocation - firstSliceLocation) / physicalDepth;
                     }
                     catch {
                         // Fallback to index-based position if slice location isn't available
                     }
                 }
+                
+                // Center the model by subtracting 0.5f after all calculations
+                normalizedZ -= 0.5f;
                 
                 // Get the slice image (loaded on demand)
                 dicomDisplayManager.SetSliceIndex(z);
@@ -413,10 +423,10 @@ namespace DeepBridgeWindowsApp.Dicom
                         {
                             byte* ptr = (byte*)bitmapData.Scan0;
                             int vertexCount = 0;
-                            int maxVerticesPerSlice = 6000; // Increased from 4000 to ensure adequate coverage
+                            int maxVerticesPerSlice = 12000; // Increased to ensure denser slice representation
                             
-                            // Calculate local sampling rate - we'll use a denser sampling to eliminate gaps
-                            int localSampleRate = SAMPLE_RATE;
+                            // Use much denser sampling to completely eliminate gaps between slices
+                            int localSampleRate = 1; // Fixed to 1 (every pixel) for critical slices
                             
                             // Process every SAMPLE_RATE-th pixel to reduce memory usage
                             for (int y = 0; y < slice.Height; y += localSampleRate)
@@ -443,8 +453,9 @@ namespace DeepBridgeWindowsApp.Dicom
                                     // Calculate grayscale intensity
                                     float intensity = (r * 0.299f + g * 0.587f + b * 0.114f) / 255f;
                                     
-                                    // Skip low-intensity pixels (likely background/noise)
-                                    if (intensity <= INTENSITY_THRESHOLD)
+                                    // Use a lower threshold to include more points for slice continuity
+                                    // This helps fill gaps between slices
+                                    if (intensity <= INTENSITY_THRESHOLD * 0.8f)
                                         continue;
                                     
                                     // Use more dense sampling for higher intensity pixels
@@ -800,8 +811,8 @@ namespace DeepBridgeWindowsApp.Dicom
                 
                 try
                 {
-                    // Use smaller point size for better performance
-                    GL.PointSize(0.1f);
+                    // Use larger point size to fill gaps between points
+                    GL.PointSize(1.5f);
                     GL.BindVertexArray(vertexArrayObject);
                     
                     // Check if we have a reasonable number of indices
