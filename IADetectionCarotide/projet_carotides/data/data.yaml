@@ -1,0 +1,14 @@
+names:
+# Chemin du dataset
+path: C:\dataset_chu_nice_2020_2021\scan\SF103E8_10.241.3.232_20210118173900817_CT\SF103E8_10.241.3.232_20210118173900817\1.2.840.113619.2.55.3.2148147470.648.1353479279.648\carotid_project\data
+
+# Train/val/test sets
+train: images/train
+val: images/val
+test: images/test
+
+# Nombre de classes
+nc: 2
+
+# Noms des classes
+names: ['carotide_gauche', 'carotide_droite']
