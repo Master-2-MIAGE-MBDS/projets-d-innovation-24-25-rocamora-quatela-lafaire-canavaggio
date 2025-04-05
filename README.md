@@ -398,6 +398,7 @@ Bien que notre implémentation CUDA ait considérablement amélioré les perform
 - Traitement complètement asynchrone des données
 - Préchargement intelligent basé sur les habitudes utilisateur
 - Parallélisation CPU-GPU pour les tâches mixtes
+- $
 
 ### Multi-GPU
 - Support des configurations multi-GPU
@@ -451,3 +452,6 @@ L'implémentation de l'accélération CUDA dans DeepBridge représente une avanc
 - Fallback gracieux pour les systèmes sans GPU compatible
 
 Notre travail établit une base solide pour les développements futurs tout en apportant des bénéfices immédiats aux utilisateurs de DeepBridge. L'exploitation de la puissance des GPU modernes pour le traitement d'images médicales ouvre la voie à des fonctionnalités encore plus avancées qui pourront améliorer davantage la qualité des soins médicaux.
+
+
+Vous pouvez me contacter via discord : uncyzer (si vous n'arrivez pas à me joindre demander à M. Galli de vous donner mon discord)
